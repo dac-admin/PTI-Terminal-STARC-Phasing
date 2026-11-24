@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Phasing Plan</title>
+<style>
+:root { color-scheme: dark; --bg: #14171c; --panel: #1d2128; --line: #343a44; --text: #f2f4f7; --dim: #9aa3ae; --amber: #ffc400; --bad: #ff7a6b; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+       font: 16px/1.45 "Segoe UI", system-ui, sans-serif; padding: 24px max(16px, env(safe-area-inset-left, 0px)); }
+body.menu { place-items: start center; }
+form, .wait { width: min(100%, 380px); background: var(--panel); border-radius: 12px; padding: 24px; display: grid; gap: 12px; }
+h1 { font-size: 22px; margin: 0; text-wrap: balance; }
+p { margin: 0; color: var(--dim); }
+label { font-size: 14px; color: var(--dim); }
+input { width: 100%; font: inherit; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+button { font: inherit; font-weight: 600; padding: 11px; border-radius: 8px; border: 0; background: var(--amber); color: #111; cursor: pointer; }
+button:disabled { opacity: .6; cursor: progress; }
+#msg, .st { min-height: 1.4em; font-size: 14px; }
+#msg.bad, .st.bad { color: var(--bad); }
+.pick { width: min(100%, 1180px); display: grid; gap: 16px; }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.top h1 { flex: 1; min-width: 12ch; }
+.back, .btn { color: var(--text); text-decoration: none; font-weight: 600; font-size: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
+.back:hover, .btn:hover { border-color: var(--amber); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.tile { display: grid; grid-template-rows: auto 1fr; background: var(--panel); border-radius: 12px; overflow: hidden; color: var(--text);
+        text-decoration: none; border: 1px solid transparent; touch-action: manipulation; }
+.tile:hover { border-color: var(--amber); }
+.tile img, .tile .ph { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000; }
+.tile .ph { display: grid; place-items: center; background: #262b33; color: var(--amber); }
+.tile .ph svg { width: 72px; height: 72px; }
+.tile .tx { padding: 12px 14px 14px; display: grid; gap: 4px; align-content: start; }
+.tile b { font-size: 17px; line-height: 1.25; }
+.tile span { color: var(--dim); font-size: 14px; font-variant-numeric: tabular-nums; }
+.player { width: min(100%, 1280px); display: grid; gap: 12px; }
+.player video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.row h1 { flex: 1; min-width: 12ch; font-size: 19px; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>Phasing plan</h1>
+  <p>Enter the password you were given.</p>
+  <label for="pw">Password</label>
+  <input id="pw" type="password" autocomplete="current-password" autocapitalize="none" spellcheck="false" required>
+  <button id="go" type="submit">Open</button>
+  <div id="msg" role="status"></div>
+</form>
+<script>
+(() => {
+const SALT = "qt5g8of1Xr+Kh7vKCTWw5g==", ROUNDS = 600000;
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const msg = document.getElementById("msg"), go = document.getElementById("go"), pw = document.getElementById("pw");
+let KEY = null, MENU = null, URLS = {};
+async function keyFor(p) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(p), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({name: "PBKDF2", salt: b64(SALT), iterations: ROUNDS, hash: "SHA-256"}, base,
+                                 {name: "AES-GCM", length: 256}, false, ["decrypt"]);
+}
+async function open_(buf) {
+  const b = new Uint8Array(buf);
+  return crypto.subtle.decrypt({name: "AES-GCM", iv: b.slice(0, 12)}, KEY, b.slice(12));
+}
+async function get(url, onPart) {
+  const r = await fetch(url, {cache: "no-cache"});
+  if (!r.ok) throw new Error(r.status);
+  const total = +r.headers.get("content-length") || 0;
+  if (!onPart || !r.body) return r.arrayBuffer();
+  const rd = r.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) {
+    const {done, value} = await rd.read();
+    if (done) break;
+    parts.push(value); got += value.length; onPart(got, total);
+  }
+  return new Blob(parts).arrayBuffer();
+}
+async function unlock(p) {
+  go.disabled = true; msg.className = ""; msg.textContent = "Checking\u2026";
+  try {
+    KEY = await keyFor(p.trim());
+    MENU = JSON.parse(new TextDecoder().decode(await open_(await get("m.bin"))));
+  } catch (e) {
+    KEY = null; go.disabled = false; msg.className = "bad"; msg.textContent = "That password didn't work. Check it and try again.";
+    try { sessionStorage.removeItem("pp"); } catch (_) {}
+    return;
+  }
+  try { sessionStorage.setItem("pp", p.trim()); } catch (_) {}
+  addEventListener("hashchange", route);
+  route();
+}
+const fmt = s => Math.floor(s / 60) + ":" + String(Math.round(s % 60)).padStart(2, "0");
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; };
+const DOC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 15.5h6M9 19h4"/></svg>';
+function tile(it) {
+  const a = el("a", "tile"); a.href = "#" + it.id;
+  if (it.img) { const img = el("img"); img.src = it.img; img.alt = ""; a.append(img); }
+  else { const ph = el("div", "ph"); ph.innerHTML = DOC; a.append(ph); }
+  const tx = el("div", "tx"); tx.append(el("b", "", it.title));
+  const bits = it.kind === "video" ? [fmt(it.secs), it.mb + " MB"] : [it.pages + " sheets", it.mb + " MB"];
+  tx.append(el("span", "", it.note + " \u00b7 " + bits.join(" \u00b7 ")));
+  a.append(tx); return a;
+}
+function showMenu() {
+  document.body.className = "menu";
+  const box = el("div", "pick"), top = el("div", "top");
+  top.append(el("h1", "", MENU.title)); box.append(top);
+  const grid = el("div", "tiles");
+  MENU.items.forEach(it => grid.append(tile(it)));
+  box.append(grid);
+  document.body.replaceChildren(box); scrollTo(0, 0);
+}
+async function load(it, want, st) {
+  if (URLS[it.id]) return URLS[it.id];
+  const buf = await get(it.id + ".bin", (got, total) => {
+    st.textContent = total ? `Loading: ${Math.round(100 * got / total)}% of ${it.mb} MB\u2026` : `Loading: ${Math.round(got / 1e6)} of ${it.mb} MB\u2026`;
+  });
+  if (location.hash !== want) return null;
+  st.textContent = "Opening\u2026";
+  const data = await open_(buf);
+  URLS[it.id] = URL.createObjectURL(new Blob([data], {type: it.kind === "video" ? "video/mp4" : "application/pdf"}));
+  return URLS[it.id];
+}
+async function show(id) {
+  const it = MENU.items.find(x => x.id === id);
+  if (!it) { location.hash = ""; return; }
+  const want = location.hash;
+  document.body.className = "";
+  const w = el("div", "wait"), st = el("div", "st"), b = el("a", "back", "\u2190 Back"); b.href = "#";
+  st.setAttribute("role", "status");
+  w.append(el("h1", "", it.title), st, b);
+  document.body.replaceChildren(w);
+  st.textContent = `Loading (about ${it.mb} MB)\u2026`;
+  let url;
+  try { url = await load(it, want, st); } catch (e) {
+    if (location.hash !== want) return;
+    st.className = "st bad"; st.textContent = "It didn't load. Check your connection and try again."; return;
+  }
+  if (!url || location.hash !== want) return;
+  const box = el("div", "player"), row = el("div", "row");
+  const back = el("a", "back", "\u2190 All files"); back.href = "#";
+  row.append(back, el("h1", "", it.title));
+  const dl = el("a", "btn", it.kind === "video" ? "Download video" : "Download PDF");
+  dl.href = url; dl.download = it.kind === "video" ? "PTI STARC phasing.mp4" : it.file;
+  if (it.kind === "pdf") { const op = el("a", "btn", "Open PDF"); op.href = url; op.target = "_blank"; op.rel = "noopener"; row.append(op); }
+  row.append(dl); box.append(row);
+  if (it.kind === "video") {
+    const v = el("video"); v.src = url; v.controls = true; v.playsInline = true; v.preload = "auto";
+    box.append(v);
+  } else {
+    const p = el("p", "", "The PDF is ready. Use Open PDF to view it, or Download PDF to save it."); box.append(p);
+  }
+  document.body.className = "menu";
+  document.body.replaceChildren(box); scrollTo(0, 0);
+}
+function route() {
+  const h = decodeURIComponent(location.hash || "").slice(1);
+  if (h) show(h); else showMenu();
+}
+document.getElementById("f").addEventListener("submit", e => { e.preventDefault(); unlock(pw.value); });
+try { const s = sessionStorage.getItem("pp"); if (s) unlock(s); } catch (_) {}
+})();
+</script>
+</body>
+</html>
